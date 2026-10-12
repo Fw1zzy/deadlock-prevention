@@ -39,7 +39,7 @@ const scenarios = {
     label: "Unsafe state",
     status: "UNSAFE STATE",
     accent: "red",
-    available: [0, 0, 0],
+    available: [2, 3, 0],
     processes: [
       { id: "P0", alloc: [0, 1, 0], max: [7, 5, 3], color: "mint" },
       { id: "P1", alloc: [2, 0, 0], max: [3, 2, 2], color: "blue" },
@@ -62,9 +62,14 @@ const teamMembers = [
   { name: "Mark Anthony Gali", x: 13, y: 91, role: "OS ADVISER" },
 ];
 
-function findDirectedCycle(nodes, edges) {
-  const graph = new Map(nodes.map((node) => [node.id, []]));
-  edges.forEach((edge) => graph.get(edge.from)?.push(edge.to));
+function findDirectedCycle(nodes, edges, canParticipate = () => true) {
+  const includedNodes = nodes.filter((node) => canParticipate(node.id));
+  const graph = new Map(includedNodes.map((node) => [node.id, []]));
+  edges.forEach((edge) => {
+    if (graph.has(edge.from) && graph.has(edge.to)) {
+      graph.get(edge.from).push(edge.to);
+    }
+  });
   const visiting = new Set();
   const visited = new Set();
   const stack = [];
@@ -90,41 +95,108 @@ function findDirectedCycle(nodes, edges) {
   return null;
 }
 
-function safetyCheck(processes, available) {
-  if (
-    processes.some((process) =>
-      process.max.some(
-        (value, index) =>
-          (Number(value) || 0) < (Number(process.alloc[index]) || 0),
-      ),
-    )
-  )
-    return { safe: false, sequence: [] };
+function safetyCheck(processes, available, resourceNames) {
   const work = available.map((value) => Number(value) || 0);
+  const total = work.map((count, resource) =>
+    processes.reduce(
+      (sum, process) => sum + (Number(process.alloc[resource]) || 0),
+      count,
+    ),
+  );
+  for (const process of processes) {
+    const allocationError = process.max.findIndex(
+      (value, resource) =>
+        (Number(value) || 0) < (Number(process.alloc[resource]) || 0),
+    );
+    if (allocationError !== -1) {
+      return {
+        safe: false,
+        sequence: [],
+        trace: [],
+        blockers: [],
+        invalid: {
+          type: "allocation",
+          processId: process.id,
+          resource: resourceNames[allocationError],
+          allocation: Number(process.alloc[allocationError]) || 0,
+          maximum: Number(process.max[allocationError]) || 0,
+        },
+      };
+    }
+    const impossibleClaim = process.max.findIndex(
+      (value, resource) => (Number(value) || 0) > total[resource],
+    );
+    if (impossibleClaim !== -1) {
+      return {
+        safe: false,
+        sequence: [],
+        trace: [],
+        blockers: [],
+        invalid: {
+          type: "claim",
+          processId: process.id,
+          resource: resourceNames[impossibleClaim],
+          claim: Number(process.max[impossibleClaim]) || 0,
+          total: total[impossibleClaim],
+        },
+      };
+    }
+  }
   const finish = processes.map(() => false);
   const sequence = [];
+  const trace = [];
   let moved = true;
   while (moved) {
     moved = false;
     processes.forEach((process, index) => {
+      if (finish[index]) return;
       const need = process.max.map(
         (value, resource) =>
           (Number(value) || 0) - (Number(process.alloc[resource]) || 0),
       );
-      if (
-        !finish[index] &&
-        need.every((value, resource) => value <= work[resource])
-      ) {
+      const canFinish = need.every(
+        (value, resource) => value <= work[resource],
+      );
+      const step = {
+        processId: process.id,
+        max: process.max.map((value) => Number(value) || 0),
+        allocation: process.alloc.map((value) => Number(value) || 0),
+        need,
+        work: [...work],
+        canFinish,
+      };
+      if (canFinish) {
+        step.released = process.alloc.map((value) => Number(value) || 0);
         process.alloc.forEach((value, resource) => {
           work[resource] += Number(value) || 0;
         });
+        step.workAfter = [...work];
         finish[index] = true;
         sequence.push(process.id);
         moved = true;
       }
+      trace.push(step);
     });
   }
-  return { safe: finish.every(Boolean), sequence };
+  const blockers = processes.flatMap((process, index) => {
+    if (finish[index]) return [];
+    const need = process.max.map(
+      (value, resource) =>
+        (Number(value) || 0) - (Number(process.alloc[resource]) || 0),
+    );
+    return [
+      {
+        processId: process.id,
+        need,
+        shortages: need.flatMap((value, resource) =>
+          value > work[resource]
+            ? [{ resource: resourceNames[resource], need: value, work: work[resource] }]
+            : [],
+        ),
+      },
+    ];
+  });
+  return { safe: finish.every(Boolean), sequence, trace, blockers, finalWork: [...work] };
 }
 
 function App() {
@@ -135,6 +207,7 @@ function App() {
   const [processes, setProcesses] = useState(scenarios.safe.processes);
   const [running, setRunning] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
+  const [showSolution, setShowSolution] = useState(false);
   const [graphProcesses, setGraphProcesses] = useState([
     { id: "P0" },
     { id: "P1" },
@@ -170,13 +243,50 @@ function App() {
     };
   }, [graphFullScreen]);
   const result = useMemo(
-    () => safetyCheck(processes, available),
-    [processes, available],
+    () => safetyCheck(processes, available, resources),
+    [processes, available, resources],
   );
   const sequence = result.sequence;
+  const formatVector = (vector) =>
+    `[${resources.map((name, index) => `${name} ${vector[index]}`).join(" · ")}]`;
+  const invalidExplanation = result.invalid
+    ? result.invalid.type === "allocation"
+      ? `${result.invalid.processId} is holding ${result.invalid.allocation} ${result.invalid.resource} units, but said it would need at most ${result.invalid.maximum}. The numbers do not agree.`
+      : `${result.invalid.processId} says it might need ${result.invalid.claim} ${result.invalid.resource} units, but the whole system only has ${result.invalid.total}.`
+    : "";
+  const firstBlocker = result.blockers[0];
+  const blockerExplanation = firstBlocker
+    ? `${firstBlocker.processId} still needs ${firstBlocker.shortages
+        .map(
+          (shortage) =>
+            `${shortage.need} ${shortage.resource}, but only ${shortage.work} ${shortage.resource} ${shortage.work === 1 ? "unit is" : "units are"} free`,
+        )
+        .join(" and ")}.`
+    : "";
+  const totalResources = resources.map(
+    (_, resource) =>
+      (Number(available[resource]) || 0) +
+      processes.reduce(
+        (sum, process) => sum + (Number(process.alloc[resource]) || 0),
+        0,
+      ),
+  );
   const graphNodes = [...graphProcesses, ...graphResources];
   const cycle = useMemo(
     () => findDirectedCycle(graphNodes, graphEdges),
+    [graphProcesses, graphResources, graphEdges],
+  );
+  const singleInstanceCycle = useMemo(
+    () =>
+      findDirectedCycle(
+        graphNodes,
+        graphEdges,
+        (id) =>
+          graphProcesses.some((process) => process.id === id) ||
+          graphResources.some(
+            (resource) => resource.id === id && resource.instances === 1,
+          ),
+      ),
     [graphProcesses, graphResources, graphEdges],
   );
   const nodePosition = (id) => {
@@ -396,6 +506,17 @@ function App() {
           (item) => item.from === edge.from && item.to === edge.to,
         ) !== index,
     );
+    const blockedRequests = graphEdges.filter((edge) => {
+      const isRequest = graphProcesses.some((node) => node.id === edge.from);
+      const resource = graphResources.find((node) => node.id === edge.to);
+      if (!isRequest || !resource) return false;
+      const allocated = graphEdges.filter(
+        (item) =>
+          item.from === resource.id &&
+          graphProcesses.some((node) => node.id === item.to),
+      ).length;
+      return allocated >= resource.instances;
+    });
     if (!graphProcesses.length || !graphResources.length) {
       setGraphCheck({
         valid: false,
@@ -416,32 +537,40 @@ function App() {
         title: "Duplicate arrow found",
         message: `Remove the repeated ${duplicate.from} → ${duplicate.to} edge. Each relationship should appear once in the graph.`,
       });
-    } else if (cycle) {
+    } else if (singleInstanceCycle) {
       const cycleResources = [
         ...new Set(
-          cycle.filter((id) => graphResources.some((node) => node.id === id)),
+          singleInstanceCycle.filter((id) =>
+            graphResources.some((node) => node.id === id),
+          ),
         ),
       ].map((id) => graphResources.find((node) => node.id === id));
-      const singleInstance = cycleResources.every(
-        (resource) => resource.instances === 1,
-      );
       setGraphCheck({
         valid: true,
-        deadlock: singleInstance,
-        title: singleInstance
-          ? "Correct graph: deadlock detected"
-          : "Correct graph: cycle detected",
-        message: singleInstance
-          ? `The cycle ${cycle.join(" → ")} returns to its starting point. Each resource in the cycle has one instance, so every process is waiting for a resource held by the next process: this is a deadlock.`
-          : `The cycle ${cycle.join(" → ")} is valid, but at least one resource in it has multiple instances. A cycle alone does not prove deadlock when resource types have multiple instances.`,
+        deadlock: true,
+        title: "Correct graph: deadlock detected",
+        message: `The cycle ${singleInstanceCycle.join(" → ")} returns to its starting point, and every resource in that cycle has one instance. This cycle proves deadlock.`,
+      });
+    } else if (cycle) {
+      setGraphCheck({
+        valid: true,
+        uncertain: true,
+        title: "Cycle found: deadlock is inconclusive",
+        message: `The cycle ${cycle.join(" → ")} includes a resource type with multiple instances. A cycle in a multiple-instance RAG neither proves nor rules out deadlock; use per-process outstanding requests and available-instance counts to determine whether processes can finish.`,
       });
     } else {
+      const blockedProcessNames = [
+        ...new Set(blockedRequests.map((edge) => edge.from)),
+      ];
       setGraphCheck({
         valid: true,
         deadlock: false,
-        title: "Correct graph: no deadlock cycle",
-        message:
-          "All arrows follow the process/resource rules, and there is no directed cycle. The current graph does not show a deadlock.",
+        title: blockedRequests.length
+          ? "Waiting requests, but no deadlock"
+          : "Correct graph: no deadlock cycle",
+        message: blockedRequests.length
+          ? `${blockedProcessNames.join(", ")} ${blockedProcessNames.length === 1 ? "is" : "are"} waiting for an allocated resource. This is resource contention, but there is no circular wait: deadlock requires the holder to also wait on another resource in a cycle.`
+          : "All arrows follow the process/resource rules, and there is no directed cycle. The current graph does not show a deadlock.",
       });
     }
   };
@@ -691,7 +820,7 @@ function App() {
                 </div>
               </div>
               <div
-                className={`metric-card status-metric ${result.safe ? "is-safe" : "is-unsafe"}`}
+                className={`metric-card status-metric ${result.safe ? "is-safe" : result.invalid ? "is-invalid" : "is-unsafe"}`}
               >
                 <div className="metric-top">
                   <span>SAFETY CHECK</span>
@@ -702,13 +831,15 @@ function App() {
                   )}
                 </div>
                 <div className="metric-value status-value">
-                  {result.safe ? "SAFE" : "UNSAFE"}
+                  {result.safe ? "SAFE" : result.invalid ? "INVALID" : "UNSAFE"}
                 </div>
                 <div className="metric-foot">
                   <span className="status-light" />
                   {result.safe
                     ? "All processes can finish"
-                    : "No safe sequence found"}
+                    : result.invalid
+                      ? `Invalid ${result.invalid.resource} value in ${result.invalid.processId}`
+                      : "No safe sequence found"}
                 </div>
               </div>
               <div className="metric-card">
@@ -1087,13 +1218,15 @@ function App() {
                 </button>
                 {graphCheck && (
                   <div
-                    className={`graph-feedback ${graphCheck.valid ? (graphCheck.deadlock ? "feedback-danger" : "feedback-good") : "feedback-invalid"}`}
+                    className={`graph-feedback ${graphCheck.valid ? (graphCheck.deadlock ? "feedback-danger" : graphCheck.uncertain ? "feedback-uncertain" : "feedback-good") : "feedback-invalid"}`}
                   >
                     <div className="feedback-symbol">
                       {graphCheck.valid
                         ? graphCheck.deadlock
                           ? "!"
-                          : "✓"
+                          : graphCheck.uncertain
+                            ? "?"
+                            : "✓"
                         : "×"}
                     </div>
                     <div>
@@ -1136,32 +1269,50 @@ function App() {
                   </div>
                 </div>
                 <div className="algorithm-steps">
-                  <div className="step complete">
+                  <div className={`step ${result.invalid ? "blocked" : "complete"}`}>
                     <span className="step-number">01</span>
                     <div>
                       <strong>Calculate need</strong>
-                      <small>Need = Max − Allocation</small>
+                      <small>
+                        {result.invalid
+                          ? invalidExplanation
+                          : "Need = Max − Allocation, for every process and resource."}
+                      </small>
                     </div>
-                    <span className="step-check">✓</span>
+                    <span className="step-check">{result.invalid ? "!" : "✓"}</span>
                   </div>
-                  <div className="step complete">
+                  <div className={`step ${result.safe || sequence.length ? "complete" : "blocked"}`}>
                     <span className="step-number">02</span>
                     <div>
                       <strong>Find a process</strong>
-                      <small>Need ≤ Available resources</small>
+                      <small>
+                        {result.invalid
+                          ? "Correct the invalid matrix values before checking safety."
+                          : result.safe
+                            ? `${sequence[0]} can finish first: Need ${formatVector(result.trace.find((step) => step.canFinish)?.need ?? [])} ≤ Work ${formatVector(result.trace.find((step) => step.canFinish)?.work ?? available)}.`
+                            : blockerExplanation || "No unfinished process can be satisfied."}
+                      </small>
                     </div>
-                    <span className="step-check">✓</span>
+                    <span className="step-check">{result.safe || sequence.length ? "✓" : "!"}</span>
                   </div>
                   <div
-                    className={`step ${result.safe ? "complete" : "blocked"}`}
+                    className={`step ${result.sequence.length || result.safe ? "complete" : "blocked"}`}
                   >
                     <span className="step-number">03</span>
                     <div>
                       <strong>Simulate completion</strong>
-                      <small>Release its resources back</small>
+                      <small>
+                        {result.invalid
+                          ? "No resources released until the inputs are valid."
+                          : result.safe
+                            ? `Release each completed process's Allocation; final Work is ${formatVector(result.finalWork)}.`
+                            : result.sequence.length
+                              ? `Partial progress: ${sequence.join(" → ")} finished, then no remaining process could proceed.`
+                              : "No process could finish, so Work could not increase."}
+                      </small>
                     </div>
                     <span className="step-check">
-                      {result.safe ? "✓" : "!"}
+                      {result.sequence.length || result.safe ? "✓" : "!"}
                     </span>
                   </div>
                   <div
@@ -1171,9 +1322,11 @@ function App() {
                     <div>
                       <strong>Check all processes</strong>
                       <small>
-                        {result.safe
-                          ? "Safe sequence exists"
-                          : "System cannot proceed"}
+                        {result.invalid
+                          ? invalidExplanation
+                          : result.safe
+                            ? `Safe sequence: ${sequence.join(" → ")}`
+                            : `No complete safe sequence. Final Work: ${formatVector(result.finalWork)}. ${blockerExplanation}`}
                       </small>
                     </div>
                     <span className="step-check">
@@ -1223,8 +1376,9 @@ function App() {
               </div>
               <div className="matrix-actions">
                 <span>
-                  Edit values directly in the matrix. Need is calculated
-                  automatically.
+                  Edit values directly in the matrix. Need is automatic;
+                  maximum claims must be at least Allocation and no greater
+                  than total resources.
                 </span>
                 <div>
                   <button className="add-button" onClick={addProcess}>
@@ -1232,6 +1386,14 @@ function App() {
                   </button>
                   <button className="add-button" onClick={addResource}>
                     <Plus size={13} /> Add resource
+                  </button>
+                  <button
+                    className="solution-toggle"
+                    aria-expanded={showSolution}
+                    onClick={() => setShowSolution((visible) => !visible)}
+                  >
+                    <Search size={13} />
+                    {showSolution ? "Hide solution" : "See the solution"}
                   </button>
                 </div>
               </div>
@@ -1275,7 +1437,12 @@ function App() {
                       const need = p.max.map((v, i) =>
                         Math.max(0, v - p.alloc[i]),
                       );
-                      const valid = p.max.every((v, i) => v >= p.alloc[i]);
+                      const valid = p.max.every(
+                        (value, i) =>
+                          (Number(value) || 0) >=
+                            (Number(p.alloc[i]) || 0) &&
+                          (Number(value) || 0) <= totalResources[i],
+                      );
                       const canFinish =
                         valid && need.every((v, i) => v <= available[i]);
                       return (
@@ -1436,16 +1603,28 @@ function App() {
                   <strong>
                     {result.safe
                       ? "Safe sequence found"
-                      : "No safe sequence exists"}
+                      : result.invalid
+                        ? "Invalid allocation matrix"
+                        : "No safe sequence exists"}
                   </strong>
                   <span>
                     {result.safe
                       ? "The system can complete all processes without entering deadlock."
-                      : "At least one process cannot complete with the current available resources."}
+                      : result.invalid?.type === "allocation"
+                        ? `${result.invalid.processId} has an allocation for ${result.invalid.resource} greater than its maximum claim.`
+                        : result.invalid?.type === "claim"
+                          ? `${result.invalid.processId}'s maximum claim for ${result.invalid.resource} exceeds the total resources in the system (available + allocated).`
+                          : "At least one process cannot complete with the current available resources."}
                   </span>
                 </div>
                 <div className="sequence">
-                  <span>SEQUENCE</span>
+                  <span>
+                    {result.safe
+                      ? "SAFE SEQUENCE"
+                      : sequence.length
+                        ? "PARTIAL SEQUENCE"
+                        : "SEQUENCE"}
+                  </span>
                   {sequence.length ? (
                     sequence.map((p, i) => (
                       <Fragment key={p}>
@@ -1458,6 +1637,64 @@ function App() {
                   )}
                 </div>
               </div>
+              {showSolution && (
+                <section className="solution-panel" aria-label="Banker's algorithm solution">
+                  <div className="solution-heading">
+                    <div>
+                      <div className="panel-kicker">LET’S SOLVE IT TOGETHER</div>
+                      <h3>How did we get this answer?</h3>
+                    </div>
+                    <span className={result.safe ? "solution-outcome safe-outcome" : "solution-outcome"}>
+                      {result.invalid ? "INVALID INPUT" : result.safe ? "SAFE" : "UNSAFE"}
+                    </span>
+                  </div>
+                  <p className="solution-intro">
+                    Imagine each resource is a kind of token. <b>Need</b> is the process’s Max claim minus what it already holds; <b>Work</b> means how many tokens are free right now. If a process has enough free tokens to finish, it gives back the tokens it was holding. We keep trying until everyone can finish, or nobody can go next. This is a pretend safety test; it does not actually move resources.
+                  </p>
+                  {result.invalid ? (
+                    <div className="solution-error"><TriangleAlert size={15} /><span>{invalidExplanation}</span></div>
+                  ) : (
+                    <>
+                      <div className="solution-vector"><strong>Free tokens at the start (Work)</strong><code>{formatVector(available.map((value) => Number(value) || 0))}</code></div>
+                      <div className="solution-trace">
+                        {result.trace.map((step, index) => {
+                          const comparisons = resources.map((resource, resourceIndex) =>
+                            `${resource}: ${step.need[resourceIndex]} ${step.need[resourceIndex] <= step.work[resourceIndex] ? "≤" : ">"} ${step.work[resourceIndex]} ${step.need[resourceIndex] <= step.work[resourceIndex] ? "(enough free)" : "(not enough free)"}`,
+                          );
+                          const shortage = step.need
+                            .map((need, resource) => need > step.work[resource]
+                              ? `it still needs ${need} ${resources[resource]}, but only ${step.work[resource]} ${resources[resource]} ${step.work[resource] === 1 ? "unit is" : "units are"} free`
+                              : null)
+                            .filter(Boolean);
+                          return (
+                            <article className={`trace-step ${step.canFinish ? "trace-finish" : "trace-wait"}`} key={`${step.processId}-${index}`}>
+                              <span className="trace-index">{String(index + 1).padStart(2, "0")}</span>
+                              <div className="trace-body">
+                                <strong>{step.processId} {step.canFinish ? "has enough to finish" : "needs to wait"}</strong>
+                                <span className="trace-equation">Need = Max − Already holding: {formatVector(step.max)} − {formatVector(step.allocation)} = {formatVector(step.need)}</span>
+                                <span className="trace-comparison">Check each resource: {comparisons.join(" · ")}</span>
+                                {step.canFinish
+                                  ? <span className="trace-release">Free units update: {formatVector(step.work)} + returned {formatVector(step.allocation)} = {formatVector(step.workAfter)}</span>
+                                  : <span className="trace-reason">It cannot finish yet because {shortage.join(" and ")}.</span>}
+                              </div>
+                              <span className="trace-result">{step.canFinish ? "PASS" : "WAIT"}</span>
+                            </article>
+                          );
+                        })}
+                      </div>
+                      {result.blockers.length > 0 && (
+                        <div className="solution-blockers">
+                          <strong>Why the remaining processes have to wait</strong>
+                          {result.blockers.map((blocker) => (
+                            <p key={blocker.processId}><b>{blocker.processId}</b>{blocker.shortages.map((shortage) => ` is short: it needs ${shortage.need} ${shortage.resource}, but only ${shortage.work} ${shortage.resource} ${shortage.work === 1 ? "unit is" : "units are"} free.`).join(" ")}</p>
+                          ))}
+                        </div>
+                      )}
+                      {result.safe && <div className="solution-success"><ShieldCheck size={15} /><span>Great! Everyone can finish. One safe order is <b>{sequence.join(" → ")}</b>.</span></div>}
+                    </>
+                  )}
+                </section>
+              )}
             </section>
             <footer className="footer">
               <span>
