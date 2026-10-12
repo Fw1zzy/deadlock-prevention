@@ -93,11 +93,14 @@ function findDirectedCycle(nodes, edges) {
 function safetyCheck(processes, available) {
   if (
     processes.some((process) =>
-      process.max.some((value, index) => value < process.alloc[index]),
+      process.max.some(
+        (value, index) =>
+          (Number(value) || 0) < (Number(process.alloc[index]) || 0),
+      ),
     )
   )
     return { safe: false, sequence: [] };
-  const work = [...available];
+  const work = available.map((value) => Number(value) || 0);
   const finish = processes.map(() => false);
   const sequence = [];
   let moved = true;
@@ -105,14 +108,15 @@ function safetyCheck(processes, available) {
     moved = false;
     processes.forEach((process, index) => {
       const need = process.max.map(
-        (value, resource) => value - process.alloc[resource],
+        (value, resource) =>
+          (Number(value) || 0) - (Number(process.alloc[resource]) || 0),
       );
       if (
         !finish[index] &&
         need.every((value, resource) => value <= work[resource])
       ) {
         process.alloc.forEach((value, resource) => {
-          work[resource] += value;
+          work[resource] += Number(value) || 0;
         });
         finish[index] = true;
         sequence.push(process.id);
@@ -443,7 +447,7 @@ function App() {
   };
 
   const updateCell = (processId, kind, index, value) => {
-    const number = Math.max(0, Number(value) || 0);
+    const number = value === "" ? "" : Math.max(0, Number(value) || 0);
     setProcesses((current) =>
       current.map((process) =>
         process.id === processId
@@ -454,6 +458,16 @@ function App() {
               ),
             }
           : process,
+      ),
+    );
+    setScenario("custom");
+    setRunning(false);
+  };
+  const updateAvailable = (index, value) => {
+    const nextValue = value === "" ? "" : Math.max(0, Number(value) || 0);
+    setAvailable((current) =>
+      current.map((cell, cellIndex) =>
+        cellIndex === index ? nextValue : cell,
       ),
     );
     setScenario("custom");
@@ -1302,6 +1316,11 @@ function App() {
                                     event.target.value,
                                   )
                                 }
+                                onBlur={(event) => {
+                                  if (event.target.value === "") {
+                                    updateCell(p.id, "alloc", i, 0);
+                                  }
+                                }}
                               />
                             </td>
                           ))}
@@ -1316,6 +1335,11 @@ function App() {
                                 onChange={(event) =>
                                   updateCell(p.id, "max", i, event.target.value)
                                 }
+                                onBlur={(event) => {
+                                  if (event.target.value === "") {
+                                    updateCell(p.id, "max", i, 0);
+                                  }
+                                }}
                               />
                             </td>
                           ))}
@@ -1363,19 +1387,13 @@ function App() {
                             type="number"
                             min="0"
                             value={n}
-                            onChange={(event) => {
-                              setAvailable((current) =>
-                                current.map((value, index) =>
-                                  index === i
-                                    ? Math.max(
-                                        0,
-                                        Number(event.target.value) || 0,
-                                      )
-                                    : value,
-                                ),
-                              );
-                              setScenario("custom");
-                              setRunning(false);
+                            onChange={(event) =>
+                              updateAvailable(i, event.target.value)
+                            }
+                            onBlur={(event) => {
+                              if (event.target.value === "") {
+                                updateAvailable(i, 0);
+                              }
                             }}
                           />
                         </td>
