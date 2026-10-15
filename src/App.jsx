@@ -9,6 +9,7 @@ import {
   Layers3,
   Maximize2,
   Minimize2,
+  MoveVertical,
   Play,
   Plus,
   RotateCcw,
@@ -27,13 +28,13 @@ const scenarios = {
     accent: "green",
     available: [3, 3, 2],
     processes: [
-      { id: "P0", alloc: [0, 1, 0], max: [7, 5, 3], color: "mint" },
-      { id: "P1", alloc: [2, 0, 0], max: [3, 2, 2], color: "blue" },
-      { id: "P2", alloc: [3, 0, 2], max: [9, 0, 2], color: "violet" },
-      { id: "P3", alloc: [2, 1, 1], max: [2, 2, 2], color: "amber" },
-      { id: "P4", alloc: [0, 0, 2], max: [4, 3, 3], color: "rose" },
+      { id: "P1", alloc: [0, 1, 0], max: [7, 5, 3], color: "mint" },
+      { id: "P2", alloc: [2, 0, 0], max: [3, 2, 2], color: "blue" },
+      { id: "P3", alloc: [3, 0, 2], max: [9, 0, 2], color: "violet" },
+      { id: "P4", alloc: [2, 1, 1], max: [2, 2, 2], color: "amber" },
+      { id: "P5", alloc: [0, 0, 2], max: [4, 3, 3], color: "rose" },
     ],
-    sequence: ["P1", "P3", "P4", "P0", "P2"],
+    sequence: ["P2", "P4", "P5", "P1", "P3"],
   },
   unsafe: {
     label: "Unsafe state",
@@ -41,11 +42,11 @@ const scenarios = {
     accent: "red",
     available: [2, 3, 0],
     processes: [
-      { id: "P0", alloc: [0, 1, 0], max: [7, 5, 3], color: "mint" },
-      { id: "P1", alloc: [2, 0, 0], max: [3, 2, 2], color: "blue" },
-      { id: "P2", alloc: [3, 0, 2], max: [9, 0, 2], color: "violet" },
-      { id: "P3", alloc: [2, 1, 1], max: [2, 2, 2], color: "amber" },
-      { id: "P4", alloc: [0, 0, 2], max: [4, 3, 3], color: "rose" },
+      { id: "P1", alloc: [0, 1, 0], max: [7, 5, 3], color: "mint" },
+      { id: "P2", alloc: [2, 0, 0], max: [3, 2, 2], color: "blue" },
+      { id: "P3", alloc: [3, 0, 2], max: [9, 0, 2], color: "violet" },
+      { id: "P4", alloc: [2, 1, 1], max: [2, 2, 2], color: "amber" },
+      { id: "P5", alloc: [0, 0, 2], max: [4, 3, 3], color: "rose" },
     ],
     sequence: [],
   },
@@ -190,13 +191,25 @@ function safetyCheck(processes, available, resourceNames) {
         need,
         shortages: need.flatMap((value, resource) =>
           value > work[resource]
-            ? [{ resource: resourceNames[resource], need: value, work: work[resource] }]
+            ? [
+                {
+                  resource: resourceNames[resource],
+                  need: value,
+                  work: work[resource],
+                },
+              ]
             : [],
         ),
       },
     ];
   });
-  return { safe: finish.every(Boolean), sequence, trace, blockers, finalWork: [...work] };
+  return {
+    safe: finish.every(Boolean),
+    sequence,
+    trace,
+    blockers,
+    finalWork: [...work],
+  };
 }
 
 function App() {
@@ -209,27 +222,30 @@ function App() {
   const [showInfo, setShowInfo] = useState(false);
   const [showSolution, setShowSolution] = useState(false);
   const [graphProcesses, setGraphProcesses] = useState([
-    { id: "P0" },
     { id: "P1" },
     { id: "P2" },
+    { id: "P3" },
   ]);
   const [graphResources, setGraphResources] = useState([
-    { id: "R0", instances: 1 },
     { id: "R1", instances: 1 },
     { id: "R2", instances: 1 },
+    { id: "R3", instances: 1 },
   ]);
   const [graphEdges, setGraphEdges] = useState([
-    { from: "P0", to: "R0" },
-    { from: "R0", to: "P1" },
     { from: "P1", to: "R1" },
     { from: "R1", to: "P2" },
     { from: "P2", to: "R2" },
-    { from: "R2", to: "P0" },
+    { from: "R2", to: "P3" },
+    { from: "P3", to: "R3" },
+    { from: "R3", to: "P1" },
   ]);
-  const [edgeFrom, setEdgeFrom] = useState("P0");
-  const [edgeTo, setEdgeTo] = useState("R0");
+  const [edgeFrom, setEdgeFrom] = useState("P1");
+  const [edgeTo, setEdgeTo] = useState("R1");
   const [graphCheck, setGraphCheck] = useState(null);
   const [graphFullScreen, setGraphFullScreen] = useState(false);
+  const [graphCanvasHeight, setGraphCanvasHeight] = useState(() =>
+    window.matchMedia("(max-width: 520px)").matches ? 350 : 420,
+  );
   const [graphPositions, setGraphPositions] = useState({});
   const [edgeDrag, setEdgeDrag] = useState(null);
   const dragRef = useRef(null);
@@ -343,11 +359,55 @@ function App() {
           y: Math.max(12, Math.min(88, y * 100 - active.offsetY)),
         },
       }));
-    } else {
+    } else if (active.type === "edge") {
       setEdgeDrag((current) =>
         current ? { ...current, x: x * 620, y: y * 288 } : current,
       );
     }
+  };
+  const startCanvasResize = (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const startY = event.clientY;
+    const startHeight = graphCanvasHeight;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "ns-resize";
+    document.body.style.userSelect = "none";
+    dragRef.current = { type: "resize" };
+    const handleMouseMove = (moveEvent) => {
+      const maxHeight = Math.max(
+        300,
+        Math.floor(window.innerHeight * (graphFullScreen ? 0.94 : 0.8)),
+      );
+      setGraphCanvasHeight(
+        Math.max(
+          300,
+          Math.min(maxHeight, startHeight + moveEvent.clientY - startY),
+        ),
+      );
+    };
+    const stopResize = () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", stopResize);
+      window.removeEventListener("blur", stopResize);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      dragRef.current = null;
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", stopResize);
+    window.addEventListener("blur", stopResize);
+  };
+  const adjustCanvasHeight = (event) => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    const change = event.key === "ArrowUp" ? 30 : -30;
+    const maxHeight = Math.max(300, Math.floor(window.innerHeight * 0.8));
+    setGraphCanvasHeight((height) =>
+      Math.max(300, Math.min(maxHeight, height + change)),
+    );
   };
   const endGraphPointer = (event) => {
     const active = dragRef.current;
@@ -364,11 +424,11 @@ function App() {
         setGraphCheck(null);
       }
     }
-    dragRef.current = null;
+    if (active?.type !== "resize") dragRef.current = null;
     setEdgeDrag(null);
   };
   const nextGraphId = (prefix, list) => {
-    let index = 0;
+    let index = 1;
     while (list.some((node) => node.id === `${prefix}${index}`)) index += 1;
     return `${prefix}${index}`;
   };
@@ -408,16 +468,16 @@ function App() {
     setGraphCheck(null);
   };
   const createRandomSafeGraph = () => {
-    const nextProcesses = [{ id: "P0" }, { id: "P1" }, { id: "P2" }];
+    const nextProcesses = [{ id: "P1" }, { id: "P2" }, { id: "P3" }];
     const nextResources = [
-      { id: "R0", instances: 2 },
       { id: "R1", instances: 1 },
       { id: "R2", instances: 1 },
+      { id: "R3", instances: 2 },
     ];
-    const order = ["P0", "R0", "P1", "R1", "P2", "R2"];
+    const order = ["P1", "R1", "P2", "R2", "P3", "R3"];
     const edges = [
-      { from: "P0", to: "R0" },
-      { from: "R0", to: "P1" },
+      { from: "P1", to: "R1" },
+      { from: "R1", to: "P2" },
     ];
     for (let fromIndex = 0; fromIndex < order.length; fromIndex += 1) {
       for (let toIndex = fromIndex + 1; toIndex < order.length; toIndex += 1) {
@@ -445,8 +505,8 @@ function App() {
     setGraphResources(nextResources);
     setGraphEdges(edges);
     setGraphPositions({});
-    setEdgeFrom("P0");
-    setEdgeTo("R0");
+    setEdgeFrom("P1");
+    setEdgeTo("R1");
     setGraphCheck({
       valid: true,
       deadlock: false,
@@ -481,24 +541,21 @@ function App() {
       const toProcess = graphProcesses.some((node) => node.id === edge.to);
       const fromResource = graphResources.some((node) => node.id === edge.from);
       const toResource = graphResources.some((node) => node.id === edge.to);
-      const allocationExceedsInstances =
-        fromResource &&
-        toProcess &&
-        graphEdges.filter(
-          (item) =>
-            item.from === edge.from &&
-            graphProcesses.some((process) => process.id === item.to),
-        ).length >
-          (graphResources.find((resource) => resource.id === edge.from)
-            ?.instances ?? 0);
       return (
         !nodeIds.has(edge.from) ||
         !nodeIds.has(edge.to) ||
         edge.from === edge.to ||
         fromProcess === toProcess ||
-        fromResource === toResource ||
-        allocationExceedsInstances
+        fromResource === toResource
       );
+    });
+    const overAllocatedResource = graphResources.find((resource) => {
+      const assignedCount = graphEdges.filter(
+        (edge) =>
+          edge.from === resource.id &&
+          graphProcesses.some((process) => process.id === edge.to),
+      ).length;
+      return assignedCount > resource.instances;
     });
     const duplicate = graphEdges.find(
       (edge, index) =>
@@ -524,6 +581,20 @@ function App() {
         message:
           "A resource-allocation graph needs at least one process and one resource.",
       });
+    } else if (overAllocatedResource) {
+      const holders = graphEdges
+        .filter(
+          (edge) =>
+            edge.from === overAllocatedResource.id &&
+            graphProcesses.some((process) => process.id === edge.to),
+        )
+        .map((edge) => edge.to);
+      setGraphCheck({
+        valid: false,
+        deadlock: false,
+        title: "Invalid graph: too many processes hold this resource",
+        message: `${overAllocatedResource.id} has ${overAllocatedResource.instances} instance${overAllocatedResource.instances === 1 ? "" : "s"}, but allocation arrows assign it to ${holders.join(", ")} (${holders.length} assignments). One instance cannot be held by more than one process at once. This is an impossible allocation, not a deadlock; show the other processes with request arrows instead.`,
+      });
     } else if (invalidEdge) {
       setGraphCheck({
         valid: false,
@@ -538,13 +609,6 @@ function App() {
         message: `Remove the repeated ${duplicate.from} → ${duplicate.to} edge. Each relationship should appear once in the graph.`,
       });
     } else if (singleInstanceCycle) {
-      const cycleResources = [
-        ...new Set(
-          singleInstanceCycle.filter((id) =>
-            graphResources.some((node) => node.id === id),
-          ),
-        ),
-      ].map((id) => graphResources.find((node) => node.id === id));
       setGraphCheck({
         valid: true,
         deadlock: true,
@@ -559,17 +623,35 @@ function App() {
         message: `The cycle ${cycle.join(" → ")} includes a resource type with multiple instances. A cycle in a multiple-instance RAG neither proves nor rules out deadlock; use per-process outstanding requests and available-instance counts to determine whether processes can finish.`,
       });
     } else {
-      const blockedProcessNames = [
-        ...new Set(blockedRequests.map((edge) => edge.from)),
-      ];
       setGraphCheck({
         valid: true,
         deadlock: false,
         title: blockedRequests.length
-          ? "Waiting requests, but no deadlock"
+          ? "Resource shortage: processes are waiting"
           : "Correct graph: no deadlock cycle",
         message: blockedRequests.length
-          ? `${blockedProcessNames.join(", ")} ${blockedProcessNames.length === 1 ? "is" : "are"} waiting for an allocated resource. This is resource contention, but there is no circular wait: deadlock requires the holder to also wait on another resource in a cycle.`
+          ? blockedRequests
+              .filter(
+                (edge, index, list) =>
+                  list.findIndex((item) => item.to === edge.to) === index,
+              )
+              .map((edge) => {
+                const resource = graphResources.find(
+                  (item) => item.id === edge.to,
+                );
+                const waiting = blockedRequests
+                  .filter((item) => item.to === edge.to)
+                  .map((item) => item.from);
+                const holders = graphEdges
+                  .filter(
+                    (item) =>
+                      item.from === edge.to &&
+                      graphProcesses.some((process) => process.id === item.to),
+                  )
+                  .map((item) => item.to);
+                return `${waiting.join(", ")} ${waiting.length === 1 ? "is" : "are"} waiting for ${edge.to}: all ${resource.instances} instance${resource.instances === 1 ? " is" : "s are"} assigned to ${holders.join(", ")}. This is a resource queue, not a deadlock by itself. It becomes deadlock only if a holder is also waiting in a circular chain.`;
+              })
+              .join(" ")
           : "All arrows follow the process/resource rules, and there is no directed cycle. The current graph does not show a deadlock.",
       });
     }
@@ -625,7 +707,7 @@ function App() {
     setRunning(false);
   };
   const addProcess = () => {
-    let nextId = 0;
+    let nextId = 1;
     while (processes.some((process) => process.id === `P${nextId}`))
       nextId += 1;
     const id = `P${nextId}`;
@@ -892,6 +974,7 @@ function App() {
                 <div
                   className="graph-canvas playground-canvas"
                   ref={graphCanvasRef}
+                  style={{ height: graphCanvasHeight }}
                   onPointerMove={moveGraphPointer}
                   onPointerUp={endGraphPointer}
                   onPointerCancel={endGraphPointer}
@@ -938,13 +1021,13 @@ function App() {
                       const fromRadius = graphProcesses.some(
                         (node) => node.id === edge.from,
                       )
-                        ? 27
-                        : 35;
+                        ? 31
+                        : 39;
                       const toRadius = graphProcesses.some(
                         (node) => node.id === edge.to,
                       )
-                        ? 27
-                        : 35;
+                        ? 31
+                        : 39;
                       const startX = x1 + (dx / distance) * fromRadius;
                       const startY = y1 + (dy / distance) * fromRadius;
                       const endX = x2 - (dx / distance) * toRadius;
@@ -1093,12 +1176,22 @@ function App() {
                       Requesting
                     </span>
                   </div>
+                  <button
+                    className="canvas-resize-handle"
+                    type="button"
+                    aria-label="Resize graph canvas; use arrow keys to adjust"
+                    title="Drag to resize, or use Up and Down arrow keys"
+                    onMouseDown={startCanvasResize}
+                    onKeyDown={adjustCanvasHeight}
+                  >
+                    <MoveVertical size={17} strokeWidth={2.2} />
+                  </button>
                 </div>
                 <div className="graph-caption">
                   <span className="caption-index">RAG / PLAYGROUND</span>
                   <p>
-                    Drag nodes to arrange, drag connector dots to draw, or click
-                    an arrow to remove it.
+                    Drag nodes to arrange, connectors to draw arrows, or the
+                    canvas corner to resize. Click arrows to remove them.
                   </p>
                   <span className="caption-status">
                     <i /> {graphNodes.length} NODES · {graphEdges.length} EDGES
@@ -1269,7 +1362,9 @@ function App() {
                   </div>
                 </div>
                 <div className="algorithm-steps">
-                  <div className={`step ${result.invalid ? "blocked" : "complete"}`}>
+                  <div
+                    className={`step ${result.invalid ? "blocked" : "complete"}`}
+                  >
                     <span className="step-number">01</span>
                     <div>
                       <strong>Calculate need</strong>
@@ -1279,9 +1374,13 @@ function App() {
                           : "Need = Max − Allocation, for every process and resource."}
                       </small>
                     </div>
-                    <span className="step-check">{result.invalid ? "!" : "✓"}</span>
+                    <span className="step-check">
+                      {result.invalid ? "!" : "✓"}
+                    </span>
                   </div>
-                  <div className={`step ${result.safe || sequence.length ? "complete" : "blocked"}`}>
+                  <div
+                    className={`step ${result.safe || sequence.length ? "complete" : "blocked"}`}
+                  >
                     <span className="step-number">02</span>
                     <div>
                       <strong>Find a process</strong>
@@ -1290,10 +1389,13 @@ function App() {
                           ? "Correct the invalid matrix values before checking safety."
                           : result.safe
                             ? `${sequence[0]} can finish first: Need ${formatVector(result.trace.find((step) => step.canFinish)?.need ?? [])} ≤ Work ${formatVector(result.trace.find((step) => step.canFinish)?.work ?? available)}.`
-                            : blockerExplanation || "No unfinished process can be satisfied."}
+                            : blockerExplanation ||
+                              "No unfinished process can be satisfied."}
                       </small>
                     </div>
-                    <span className="step-check">{result.safe || sequence.length ? "✓" : "!"}</span>
+                    <span className="step-check">
+                      {result.safe || sequence.length ? "✓" : "!"}
+                    </span>
                   </div>
                   <div
                     className={`step ${result.sequence.length || result.safe ? "complete" : "blocked"}`}
@@ -1376,9 +1478,9 @@ function App() {
               </div>
               <div className="matrix-actions">
                 <span>
-                  Edit values directly in the matrix. Need is automatic;
-                  maximum claims must be at least Allocation and no greater
-                  than total resources.
+                  Edit values directly in the matrix. Need is automatic; maximum
+                  claims must be at least Allocation and no greater than total
+                  resources.
                 </span>
                 <div>
                   <button className="add-button" onClick={addProcess}>
@@ -1439,8 +1541,7 @@ function App() {
                       );
                       const valid = p.max.every(
                         (value, i) =>
-                          (Number(value) || 0) >=
-                            (Number(p.alloc[i]) || 0) &&
+                          (Number(value) || 0) >= (Number(p.alloc[i]) || 0) &&
                           (Number(value) || 0) <= totalResources[i],
                       );
                       const canFinish =
@@ -1638,59 +1739,139 @@ function App() {
                 </div>
               </div>
               {showSolution && (
-                <section className="solution-panel" aria-label="Banker's algorithm solution">
+                <section
+                  className="solution-panel"
+                  aria-label="Banker's algorithm solution"
+                >
                   <div className="solution-heading">
                     <div>
-                      <div className="panel-kicker">LET’S SOLVE IT TOGETHER</div>
+                      <div className="panel-kicker">
+                        LET’S SOLVE IT TOGETHER
+                      </div>
                       <h3>How did we get this answer?</h3>
                     </div>
-                    <span className={result.safe ? "solution-outcome safe-outcome" : "solution-outcome"}>
-                      {result.invalid ? "INVALID INPUT" : result.safe ? "SAFE" : "UNSAFE"}
+                    <span
+                      className={
+                        result.safe
+                          ? "solution-outcome safe-outcome"
+                          : "solution-outcome"
+                      }
+                    >
+                      {result.invalid
+                        ? "INVALID INPUT"
+                        : result.safe
+                          ? "SAFE"
+                          : "UNSAFE"}
                     </span>
                   </div>
                   <p className="solution-intro">
-                    Imagine each resource is a kind of token. <b>Need</b> is the process’s Max claim minus what it already holds; <b>Work</b> means how many tokens are free right now. If a process has enough free tokens to finish, it gives back the tokens it was holding. We keep trying until everyone can finish, or nobody can go next. This is a pretend safety test; it does not actually move resources.
+                    Imagine each resource is a kind of token. <b>Need</b> is the
+                    process’s Max claim minus what it already holds; <b>Work</b>{" "}
+                    means how many tokens are free right now. If a process has
+                    enough free tokens to finish, it gives back the tokens it
+                    was holding. We keep trying until everyone can finish, or
+                    nobody can go next. This is a pretend safety test; it does
+                    not actually move resources.
                   </p>
                   {result.invalid ? (
-                    <div className="solution-error"><TriangleAlert size={15} /><span>{invalidExplanation}</span></div>
+                    <div className="solution-error">
+                      <TriangleAlert size={15} />
+                      <span>{invalidExplanation}</span>
+                    </div>
                   ) : (
                     <>
-                      <div className="solution-vector"><strong>Free tokens at the start (Work)</strong><code>{formatVector(available.map((value) => Number(value) || 0))}</code></div>
+                      <div className="solution-vector">
+                        <strong>Free tokens at the start (Work)</strong>
+                        <code>
+                          {formatVector(
+                            available.map((value) => Number(value) || 0),
+                          )}
+                        </code>
+                      </div>
                       <div className="solution-trace">
                         {result.trace.map((step, index) => {
-                          const comparisons = resources.map((resource, resourceIndex) =>
-                            `${resource}: ${step.need[resourceIndex]} ${step.need[resourceIndex] <= step.work[resourceIndex] ? "≤" : ">"} ${step.work[resourceIndex]} ${step.need[resourceIndex] <= step.work[resourceIndex] ? "(enough free)" : "(not enough free)"}`,
+                          const comparisons = resources.map(
+                            (resource, resourceIndex) =>
+                              `${resource}: ${step.need[resourceIndex]} ${step.need[resourceIndex] <= step.work[resourceIndex] ? "≤" : ">"} ${step.work[resourceIndex]} ${step.need[resourceIndex] <= step.work[resourceIndex] ? "(enough free)" : "(not enough free)"}`,
                           );
                           const shortage = step.need
-                            .map((need, resource) => need > step.work[resource]
-                              ? `it still needs ${need} ${resources[resource]}, but only ${step.work[resource]} ${resources[resource]} ${step.work[resource] === 1 ? "unit is" : "units are"} free`
-                              : null)
+                            .map((need, resource) =>
+                              need > step.work[resource]
+                                ? `it still needs ${need} ${resources[resource]}, but only ${step.work[resource]} ${resources[resource]} ${step.work[resource] === 1 ? "unit is" : "units are"} free`
+                                : null,
+                            )
                             .filter(Boolean);
                           return (
-                            <article className={`trace-step ${step.canFinish ? "trace-finish" : "trace-wait"}`} key={`${step.processId}-${index}`}>
-                              <span className="trace-index">{String(index + 1).padStart(2, "0")}</span>
+                            <article
+                              className={`trace-step ${step.canFinish ? "trace-finish" : "trace-wait"}`}
+                              key={`${step.processId}-${index}`}
+                            >
+                              <span className="trace-index">
+                                {String(index + 1).padStart(2, "0")}
+                              </span>
                               <div className="trace-body">
-                                <strong>{step.processId} {step.canFinish ? "has enough to finish" : "needs to wait"}</strong>
-                                <span className="trace-equation">Need = Max − Already holding: {formatVector(step.max)} − {formatVector(step.allocation)} = {formatVector(step.need)}</span>
-                                <span className="trace-comparison">Check each resource: {comparisons.join(" · ")}</span>
-                                {step.canFinish
-                                  ? <span className="trace-release">Free units update: {formatVector(step.work)} + returned {formatVector(step.allocation)} = {formatVector(step.workAfter)}</span>
-                                  : <span className="trace-reason">It cannot finish yet because {shortage.join(" and ")}.</span>}
+                                <strong>
+                                  {step.processId}{" "}
+                                  {step.canFinish
+                                    ? "has enough to finish"
+                                    : "needs to wait"}
+                                </strong>
+                                <span className="trace-equation">
+                                  Need = Max − Already holding:{" "}
+                                  {formatVector(step.max)} −{" "}
+                                  {formatVector(step.allocation)} ={" "}
+                                  {formatVector(step.need)}
+                                </span>
+                                <span className="trace-comparison">
+                                  Check each resource: {comparisons.join(" · ")}
+                                </span>
+                                {step.canFinish ? (
+                                  <span className="trace-release">
+                                    Free units update: {formatVector(step.work)}{" "}
+                                    + returned {formatVector(step.allocation)} ={" "}
+                                    {formatVector(step.workAfter)}
+                                  </span>
+                                ) : (
+                                  <span className="trace-reason">
+                                    It cannot finish yet because{" "}
+                                    {shortage.join(" and ")}.
+                                  </span>
+                                )}
                               </div>
-                              <span className="trace-result">{step.canFinish ? "PASS" : "WAIT"}</span>
+                              <span className="trace-result">
+                                {step.canFinish ? "PASS" : "WAIT"}
+                              </span>
                             </article>
                           );
                         })}
                       </div>
                       {result.blockers.length > 0 && (
                         <div className="solution-blockers">
-                          <strong>Why the remaining processes have to wait</strong>
+                          <strong>
+                            Why the remaining processes have to wait
+                          </strong>
                           {result.blockers.map((blocker) => (
-                            <p key={blocker.processId}><b>{blocker.processId}</b>{blocker.shortages.map((shortage) => ` is short: it needs ${shortage.need} ${shortage.resource}, but only ${shortage.work} ${shortage.resource} ${shortage.work === 1 ? "unit is" : "units are"} free.`).join(" ")}</p>
+                            <p key={blocker.processId}>
+                              <b>{blocker.processId}</b>
+                              {blocker.shortages
+                                .map(
+                                  (shortage) =>
+                                    ` is short: it needs ${shortage.need} ${shortage.resource}, but only ${shortage.work} ${shortage.resource} ${shortage.work === 1 ? "unit is" : "units are"} free.`,
+                                )
+                                .join(" ")}
+                            </p>
                           ))}
                         </div>
                       )}
-                      {result.safe && <div className="solution-success"><ShieldCheck size={15} /><span>Great! Everyone can finish. One safe order is <b>{sequence.join(" → ")}</b>.</span></div>}
+                      {result.safe && (
+                        <div className="solution-success">
+                          <ShieldCheck size={15} />
+                          <span>
+                            Great! Everyone can finish. One safe order is{" "}
+                            <b>{sequence.join(" → ")}</b>.
+                          </span>
+                        </div>
+                      )}
                     </>
                   )}
                 </section>
